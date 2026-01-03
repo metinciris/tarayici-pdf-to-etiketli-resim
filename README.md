@@ -1,23 +1,25 @@
-# etiket.py  
-## PDF içinden sayfa resimleri çıkarma, etiket OCR ile adlandırma ve okunurluk iyileştirme (Windows 10/11)
+# multi_etiket.py  
+## PDF klasörleri için etiket OCR + sayfa resimlerini adlandırma (Windows 10 / 11)
 
-Bu araç, **tarayıcıdan (scan) gelen PDF** dosyalarının her sayfasındaki **gömülü görüntüyü** kalite kaybı olmadan çıkarır, sayfa üzerindeki **sarı etiket içindeki kırmızı numarayı** OCR ile okur ve çıktıları **etiket numarasına göre adlandırır**.
+Bu araç, **tarayıcıdan (scan) gelen PDF dosyalarını** tek tek veya **toplu (multi-PDF)** olarak işler.
+
+PDF içindeki **gömülü sayfa görüntülerini** kalite kaybı olmadan çıkarır, sayfa üzerindeki **sarı etiket içindeki kırmızı numarayı** OCR ile okur ve çıktıları **etiket numarasına göre adlandırır**.
 
 Ayrıca:
-- Microsoft Picture Manager’daki **“Orta ton -100”** etkisine benzer bir iyileştirme,
-- IrfanView **Auto Adjust Colors** benzeri hafif bir auto-adjust
+- Microsoft Picture Manager’daki **“Orta ton -100”** etkisine benzer bir iyileştirme
+- IrfanView **Auto Adjust Colors** benzeri hafif auto-adjust
 
 uygular. Amaç:  
-📄 **form ve el yazılarının daha okunur olması**,  
-🏷️ **etiket ve fotoğrafların bozulmaması**.
+📄 yazı ve el yazılarının daha okunur olması,  
+🏷️ etiket ve fotoğrafların bozulmaması.
 
 ---
 
 ## Ne yapar?
 
-- PDF içindeki **gömülü tarama resimlerini** çıkarır (yeniden render etmez)
+- PDF içindeki **gömülü tarama görüntülerini** çıkarır (sayfayı yeniden render etmez)
 - Sarı etiketi tespit eder, kırmızı rakamı OCR ile okur
-- Dosya adını etikete göre verir:
+- Dosyaları etikete göre adlandırır:
   - `35830.jpg`
   - `35831.jpg`
 - Etiket okunamazsa:
@@ -26,8 +28,9 @@ uygular. Amaç:
   - PDF’nin bulunduğu klasörde
   - **PDF adıyla oluşturulan tek bir klasöre**
   yazar
-- Klasör varsa **“Üzerine yazılsın mı?”** diye sorar
-- İşlem boyunca **terminalde log yazar**
+- Tek PDF veya **klasör içindeki tüm PDF’leri (alt klasörler dahil)** işleyebilir
+- Multi-PDF modunda **global politika** ile “üzerine yaz / atla / tek tek sor” seçimi yapılabilir
+- Terminalde ayrıntılı log yazar
 - İş bitince popup göstermez, sadece kısa bir **bip** sesi verir
 
 ---
@@ -69,7 +72,7 @@ pip --version
 
 ### 2️⃣ Tesseract OCR (ZORUNLU)
 
-Etiket numarası OCR için gereklidir.
+Etiket numarasını okumak için gereklidir.
 
 İndirme (Windows):
 👉 [https://github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki)
@@ -83,7 +86,7 @@ tesseract --version
 > Eğer `tesseract` komutu bulunamazsa:
 >
 > * PATH’e ekleyin
-> * veya `etiket.py` içine şu satırı ekleyin:
+> * veya `multi_etiket.py` içine şu satırı ekleyin:
 >
 > ```python
 > pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -101,7 +104,7 @@ pip install pymupdf opencv-python numpy pytesseract
 
 ## Kurulum
 
-1. `etiket.py` dosyasını bir klasöre koy
+1. `multi_etiket.py` dosyasını bir klasöre koy
 2. Gerekli Python kütüphanelerini kur
 3. Tesseract OCR kurulu olduğundan emin ol
 
@@ -110,18 +113,48 @@ pip install pymupdf opencv-python numpy pytesseract
 ## Çalıştırma
 
 ```bat
-python etiket.py
+python multi_etiket.py
 ```
 
-* PDF seçme penceresi açılır
-* PDF seçilir
-* Çıktılar otomatik üretilir
+Başlangıçta program sorar:
+
+* **Tek PDF mi?**
+* **Klasör modu mu?**
 
 ---
 
-## Etiket numarası ayarları (ÖNEMLİ)
+## Multi-PDF (Klasör) Modu
 
-`etiket.py` dosyasının **en üstünde** şu ayarlar vardır:
+Klasör modu seçildiğinde:
+
+* Seçilen klasörün içindeki **tüm PDF’ler**
+* **Alt klasörler dahil**
+* Sırayla işlenir
+
+---
+
+## Global politika (ÖNEMLİ)
+
+Multi-PDF modunda, başta **tek sefer** şu soru sorulur:
+
+**“Çıktı klasörü zaten varsa ne yapalım?”**
+
+Seçenekler:
+
+* **Yes** → Tüm PDF’ler için **üzerine yaz**
+* **No** → Tüm PDF’ler için **atla**
+* **Cancel** → **Her PDF için tek tek sor**
+
+Bu sayede:
+
+* Büyük klasörlerde sürekli popup çıkmaz
+* Kontrol tamamen kullanıcıdadır
+
+---
+
+## Etiket numarası ayarları
+
+`multi_etiket.py` dosyasının **en üstünde** bulunur:
 
 ```python
 LABEL_MIN_DEFAULT = 100
@@ -145,7 +178,7 @@ ASK_LABEL_RANGE_GUI = True
 
 Bu durumda:
 
-* PDF seçtikten sonra
+* Program başında
 * Etiket min–max aralığı GUI üzerinden sorulur
 
 ---
@@ -193,40 +226,20 @@ ile yapılır.
 
 ---
 
-## Sık karşılaşılan sorunlar
+## Kimler için uygun?
 
-### Etiket hiç okunmuyor
+Özellikle:
 
-* Sarı etiket HSV aralığı farklı olabilir
-* Kod içinde şu aralık ayarlanabilir:
+* Patoloji
+* Endoskopi
+* Laboratuvar
+* Form + etiket içeren arşiv taramaları
 
-```python
-lower_yellow = np.array([20, 100, 100])
-upper_yellow = np.array([30, 255, 255])
-```
-
-### Kırmızı rakam seçilemiyor
-
-* Etiket baskısı farklıysa HSV kırmızı aralıkları ayarlanabilir
+için optimize edilmiştir.
 
 ---
 
 ## Lisans
 
-İhtiyacına göre ekleyebilirsin (örn. MIT).
-
----
-
-## Not
-
-Bu araç özellikle:
-
-* Patoloji
-* Endoskopi
-* Laboratuvar
-* Form + etiket içeren taramalar
-
-için optimize edilmiştir.
-
-
+ MIT
 

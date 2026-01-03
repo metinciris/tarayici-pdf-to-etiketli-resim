@@ -8,7 +8,7 @@ import pytesseract
 import fitz  # PyMuPDF
 import shutil
 import tempfile
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 # Optional "done" sound (Windows)
 try:
@@ -26,21 +26,17 @@ LABEL_MAX_DEFAULT = 45000
 
 # GUI'de min–max sor (default kapalı)
 ASK_LABEL_RANGE_GUI = False
-
-# GUI açıkken de "sormadan geç" olsun istersen:
-# - True: önce "Özel aralık gireyim mi?" diye sorar
-# - False: direkt min/max ister
-ASK_LABEL_RANGE_CONFIRM_FIRST = True
+ASK_LABEL_RANGE_CONFIRM_FIRST = True  # True: "değiştirmek ister misin?" sorar
 
 # 1) Microsoft Picture Manager "Orta ton -100" benzeri
 APPLY_MIDTONE_MINUS_100 = True
 MIDTONE_GAMMA = 0.88  # 0.85–0.92 önerilir
 
-# 2) Hafif renk/kontrast dokunuşu (kurşun kalemi öldürmesin diye yumuşak)
+# 2) Hafif renk/kontrast dokunuşu
 APPLY_COLOR_TWEAK = True
 BRIGHTNESS = 0
-CONTRAST = 6       # 0..30 (çok yükseltme kurşun kalemi zayıflatabilir)
-SATURATION = 1.00  # 1.0 aynı, 1.05 az canlı, 0.95 az bastır
+CONTRAST = 6
+SATURATION = 1.00
 
 # 3) IrfanView "Auto Adjust Colors" benzeri hafif kanal-stretch
 APPLY_IRFAN_AUTO_ADJUST = True
@@ -49,7 +45,7 @@ IRFAN_HIGH_PCT = 99.0
 
 JPEG_QUALITY = 95
 
-# Multi-PDF modu: klasörde alt klasörleri de tara (recursive)
+# Multi-PDF modu: alt klasörleri de tara
 RECURSIVE_SCAN_SUBFOLDERS = True
 
 # =========================
@@ -359,18 +355,45 @@ def ensure_output_folder(pdf_path: str) -> Tuple[str, str]:
     return out_dir, folder_name
 
 
-def resolve_existing_output_folder(root, out_dir: str, folder_name: str) -> str:
+# ---------- GLOBAL POLICY ----------
+# "ask" | "overwrite_all" | "skip_all"
+def choose_global_policy_for_existing_outputs(root) -> Optional[str]:
     """
-    If out_dir exists, asks user:
-      Yes = overwrite
-      No  = skip
-      Cancel = abort all
+    Returns one of:
+      - "ask"
+      - "overwrite_all"
+      - "skip_all"
+    Returns None if cancelled.
+    """
+    res = messagebox.askyesnocancel(
+        "Global politika",
+        "Çıktı klasörü zaten varsa ne yapalım?\n\nYes: Hepsini ÜZERİNE YAZ\nNo: Hepsini ATLA\nCancel: Her PDF için TEK TEK SOR"
+    )
+    if res is None:
+        # Cancel => ask each time
+        return "ask"
+    if res is True:
+        return "overwrite_all"
+    return "skip_all"
+
+
+def resolve_existing_output_folder(root, out_dir: str, folder_name: str, policy: str) -> str:
+    """
+    policy: "ask" | "overwrite_all" | "skip_all"
     Returns one of: "overwrite", "skip", "abort"
     """
     if not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
         return "overwrite"  # proceed
 
+    if policy == "overwrite_all":
+        clear_folder_contents(out_dir)
+        return "overwrite"
+
+    if policy == "skip_all":
+        return "skip"
+
+    # policy == "ask"
     ans = messagebox.askyesnocancel(
         "Klasör var",
         f"'{folder_name}' klasörü zaten var.\n\nYes: Üzerine yaz\nNo: Atla\nCancel: Tüm işlemi durdur"
@@ -379,24 +402,25 @@ def resolve_existing_output_folder(root, out_dir: str, folder_name: str) -> str:
         return "abort"
     if ans is False:
         return "skip"
-
-    # Yes => overwrite
     clear_folder_contents(out_dir)
     return "overwrite"
 
 
-def process_single_pdf(root, pdf_path: str, label_min: int, label_max: int) -> Tuple[int, int, bool]:
+def process_single_pdf(root, pdf_path: str, label_min: int, label_max: int, policy: str) -> Tuple[int, int, bool, bool]:
     """
-    Processes one PDF. Returns (written, unread, ok)
-    ok=False if skipped/failed.
+    Returns (written, unread, continue_all, processed)
+      - continue_all: False if user aborted all
+      - processed: False if skipped
     """
     out_dir, folder_name = ensure_output_folder(pdf_path)
-    action = resolve_existing_output_folder(root, out_dir, folder_name)
+    action = resolve_existing_output_folder(root, out_dir, folder_name, policy)
+
     if action == "abort":
-        return 0, 0, False
+        print(f"[ABORT] {pdf_path}")
+        return 0, 0, False, False
     if action == "skip":
         print(f"[SKIP] {pdf_path}")
-        return 0, 0, True  # ok but skipped
+        return 0, 0, True, False
 
     print(f"\n[PDF] {pdf_path}")
     print(f"[OUT] {out_dir}")
@@ -408,7 +432,7 @@ def process_single_pdf(root, pdf_path: str, label_min: int, label_max: int) -> T
         extracted = extract_best_image_per_page(pdf_path, tmp_dir)
         if not extracted:
             print("[ERR] PDF içinden resim çıkarılamadı.")
-            return 0, 0, True  # continue other PDFs
+            return 0, 0, True, True
 
         for p in extracted:
             img = cv2.imread(p)
@@ -416,15 +440,12 @@ def process_single_pdf(root, pdf_path: str, label_min: int, label_max: int) -> T
                 print(f"  [WARN] {os.path.basename(p)} okunamadı.")
                 continue
 
-            # OCR on original colors, maybe rotated
             label, chosen_img, rotated = find_label_and_orientation(img, label_min, label_max)
-
-            # Then apply tone/color pipeline
             out_img = final_tone_and_color(chosen_img)
 
             if label is None:
                 unread += 1
-                base_name = os.path.basename(p)  # page_XXX.jpg
+                base_name = os.path.basename(p)
                 out_path = os.path.join(out_dir, base_name)
                 print(f"  [WARN] Etiket yok/okunamadı -> {base_name} (isim değişmedi)")
             else:
@@ -440,7 +461,7 @@ def process_single_pdf(root, pdf_path: str, label_min: int, label_max: int) -> T
             written += 1
 
     print(f"[PDF DONE] Yazılan: {written} | Etiket okunamayan: {unread}")
-    return written, unread, True
+    return written, unread, True, True
 
 
 def main():
@@ -453,7 +474,7 @@ def main():
         "Klasör modu ile çalışılsın mı?\n\nEvet: Klasör seç (içindeki tüm PDF'ler)\nHayır: Tek PDF seç"
     )
 
-    # Label range: default or GUI override
+    # Label range
     label_min, label_max = LABEL_MIN_DEFAULT, LABEL_MAX_DEFAULT
     if ASK_LABEL_RANGE_GUI:
         label_min, label_max = get_label_range_gui(root, LABEL_MIN_DEFAULT, LABEL_MAX_DEFAULT)
@@ -465,8 +486,9 @@ def main():
 
     total_written = 0
     total_unread = 0
-    processed_pdfs = 0
-    skipped_or_failed = 0
+    total_pdfs_found = 0
+    total_pdfs_processed = 0
+    total_pdfs_skipped = 0
 
     if not mode_is_folder:
         pdf_path = filedialog.askopenfilename(
@@ -477,10 +499,14 @@ def main():
             print("[INFO] PDF seçilmedi.")
             return
 
-        w, u, ok = process_single_pdf(root, pdf_path, label_min, label_max)
+        # Single PDF: policy forced to "ask"
+        policy = "ask"
+        w, u, cont, processed = process_single_pdf(root, pdf_path, label_min, label_max, policy)
         total_written += w
         total_unread += u
-        processed_pdfs += 1 if ok else 0
+        total_pdfs_found = 1
+        total_pdfs_processed = 1 if processed else 0
+        total_pdfs_skipped = 0 if processed else 1
 
     else:
         folder = filedialog.askdirectory(title="PDF klasörünü seçin (alt klasörler dahil taranır)")
@@ -489,25 +515,38 @@ def main():
             return
 
         pdfs = find_pdfs_in_folder(folder, recursive=RECURSIVE_SCAN_SUBFOLDERS)
+        total_pdfs_found = len(pdfs)
+
         print(f"[INFO] Klasör: {folder}")
         print(f"[INFO] Bulunan PDF sayısı: {len(pdfs)} (alt klasörler={'Evet' if RECURSIVE_SCAN_SUBFOLDERS else 'Hayır'})")
-
         if not pdfs:
             print("[INFO] PDF bulunamadı.")
             return
 
+        # GLOBAL POLICY selection
+        policy = choose_global_policy_for_existing_outputs(root)
+        # policy is always one of "ask/overwrite_all/skip_all"
+        print(f"[INFO] Global politika: {policy}")
+
         for idx, pdf_path in enumerate(pdfs, start=1):
             print(f"\n=== ({idx}/{len(pdfs)}) ===")
-            w, u, ok = process_single_pdf(root, pdf_path, label_min, label_max)
+            w, u, cont, processed = process_single_pdf(root, pdf_path, label_min, label_max, policy)
             total_written += w
             total_unread += u
-            processed_pdfs += 1
-            if not ok:
-                skipped_or_failed += 1
-                break  # abort requested
+
+            if processed:
+                total_pdfs_processed += 1
+            else:
+                total_pdfs_skipped += 1
+
+            if not cont:
+                print("[INFO] Kullanıcı tüm işlemi durdurdu.")
+                break
 
     print("\n[ALL DONE]")
-    print(f"  Toplam PDF: {processed_pdfs}")
+    print(f"  Bulunan PDF: {total_pdfs_found}")
+    print(f"  İşlenen PDF: {total_pdfs_processed}")
+    print(f"  Atlanan PDF: {total_pdfs_skipped}")
     print(f"  Toplam yazılan resim: {total_written}")
     print(f"  Toplam etiket okunamayan: {total_unread}")
     beep_done()
